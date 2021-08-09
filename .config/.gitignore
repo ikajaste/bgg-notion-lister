@@ -1,0 +1,4 @@
+*
+!.gitignore
+!database_id.template
+!notion_token.template
