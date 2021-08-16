@@ -47,6 +47,10 @@ function bgg_processItem(item) {
     if (!item.details[linkItem.type]) item.details[linkItem.type] = [];
     item.details[linkItem.type].push(linkItem.value);
   }
+  item.constructed_bgg_url = 'https://www.boardgamegeek.com/boardgame/'+item.id;
+  if (item.image) {
+    item.image = item.image.replace('&amp;&amp;#35;40;','(').replace('&amp;&amp;#35;41;',')');
+  }
   return item;
   /* Returning object:
    {
@@ -66,6 +70,7 @@ function bgg_processItem(item) {
     "minage": 10,
     "link": [...],
     "primaryName": "Citadels",
+    "constructed_bgg_url": "https://...",
     "details": {
       "boardgamecategory": [...],
       "boardgamemechanic": [...],
@@ -110,6 +115,28 @@ function dumpj(data) {
   console.log(JSON.stringify(data,null,2));
 }
 
+class NotionItem {
+  constructor(itemData) {
+    this.itemData = itemData;
+  }
+
+  hasName() {
+    const gameTitleObject = this.itemData.properties["Name"].title;
+    if (gameTitleObject.length === 0) return false;
+    const name = this.name;
+    if (name == '' || name == 'undefined') return false;
+    return true;
+  }
+  get name() {
+    const gameTitleObject = this.itemData.properties["Name"].title;
+    if (gameTitleObject.length > 0) {
+      return gameTitleObject[0].plain_text;
+    } else {
+      return "";
+    }
+  }
+}
+
 async function doThings() {
   currentTime = new Date();
   if (verbose) { console.log("Accessing notion database "+database_id+"..."); }
@@ -120,18 +147,21 @@ async function doThings() {
   
   // Collect items, and check for missing BGG links
   detailsQueue = [];
+  notionItems = [];
   if (notionResult.object == 'list') {
     if (verbose) console.log("Count of items:", notionResult.results.length);
     for (const gameItem of notionResult.results) {
+      game = new NotionItem(gameItem);
+      notionItems.push(game);
+
       const gameTitleObject = gameItem.properties["Name"].title;
-      if (gameTitleObject.length > 0) {
-        const gameTitle = gameTitleObject[0].plain_text;
-        if (gameTitle == '' || gameTitle == 'undefined') continue; // Skip unnamed game
+      if (game.hasName()) {
+        const gameTitle = game.name;
         if (verbose) console.log("*** Processing game:", gameTitle);
         if (gameItem.properties.bgg_id && gameItem.properties.bgg_id.number) {
           const bggId = gameItem.properties.bgg_id.number;
           if (verbose) console.log("Game "+gameTitle+" already has bgg_id:", bggId);
-          detailsQueue.push({ bgg_id: bggId, notion_id: gameItem.id, notion_data: gameItem });
+          detailsQueue.push({ gameTitle: gameTitle, bgg_id: bggId, notion_id: gameItem.id, notion_data: gameItem });
           continue;
         }
         if (!gameItem.properties.bgg_id || !gameItem.properties.bgg_id.number) {
@@ -191,26 +221,41 @@ async function doThings() {
 
     bggData = queueItem.bgg_data;
     toUpdate = {};
-    sync = async (notionKey, bggKey) => {
-      if (queueItem.notion_data.properties[notionKey] && queueItem.notion_data.properties[notionKey].number && queueItem.notion_data.properties[notionKey].number !== 0) return; // Is already set
+    sync = async (notionKey, bggKey, notionType) => {
+      const props = queueItem.notion_data.properties[notionKey];
+      if (props) { // if empty, will not exist
+        if (props.number && props.number !== 0) return; // Is already set
+        if (props.url && props.url !== "") return; // Is already set
+        if (props.rich_text && props.rich_text.length > 0) return; // Is already set
+      }
       if (!bggData) {
         if (verbose) console.log("Missing data for at least "+notionKey+" - fetching from BGG")
         bggData = await bgg_gameDetails(queueItem.bgg_id); // Fetch data
       }
-      if (bggData[bggKey] || bggData[bggKey] === 0) toUpdate[notionKey] = { number: bggData[bggKey] }
-      else {
+      if (!bggData[bggKey] && bggData[bggKey] !== 0) return;
+      const newContent = bggData[bggKey];
+      if (notionType === "number") {
+        toUpdate[notionKey] = { number: newContent }
+      } else if (notionType === "url") {
+        toUpdate[notionKey] = { url: newContent }
+      } else if (notionType === "rich_text") {
+        toUpdate[notionKey] = { rich_text: [ { type: "text", text: { content: newContent } } ] };
+      } else {
         console.log(" BGG KEY "+bggKey+" FAILS"); dumpj(bggData);
       }
     }
 
     //dumpj(queueItem.notion_data);
     if (queueItem.notion_data.data_complete && queueItem.notion_data.data_complete.checkbox == true) continue; // data marked as complete, skipping
-    await sync("Players min", "minplayers");
-    await sync("Players max", "maxplayers");
-    await sync("Playtime min", "minplaytime");
-    await sync("Playtime max", "maxplaytime");
-    await sync("Age", "minage");
-    await sync("Published year", "yearpublished");
+    await sync("Players min", "minplayers", "number");
+    await sync("Players max", "maxplayers", "number");
+    await sync("Playtime min", "minplaytime", "number");
+    await sync("Playtime max", "maxplaytime", "number");
+    await sync("Age", "minage", "number");
+    await sync("Published year", "yearpublished", "number");
+    await sync("bgg_name", "primaryName", "rich_text");
+    await sync("BGG", "constructed_bgg_url", "url");
+    await sync("bgg_image_url", "image", "url");
 
     // to sync: BGG, bgg_name 
 
