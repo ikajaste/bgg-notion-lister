@@ -116,6 +116,10 @@ function dumpj(data) {
 }
 
 class NotionItem {
+  get data() {
+    return this.itemData;
+  }
+
   constructor(itemData) {
     this.itemData = itemData;
   }
@@ -135,7 +139,33 @@ class NotionItem {
       return "";
     }
   }
+  get id() {
+    return this.itemData.id;
+  }
 }
+
+class NotionContainer {
+  items = [];
+
+  include(item) {
+    const itemId = item.id;
+    if (!this.hasItem(item.id)) {
+      this.items.push(item);
+    }
+  }
+  hasItem(id) {
+    for (const item of this.items) {
+      if (item.id == id) return True;
+    }
+    return false;
+  }
+  sort(sortFunction) {
+    this.items.sort(sortFunction);
+    //noop
+  }
+}
+
+notionItems = new NotionContainer();
 
 async function doThings() {
   currentTime = new Date();
@@ -143,16 +173,15 @@ async function doThings() {
   const notionResult = await notion.databases.query({
     database_id: database_id
   });
-  if (verbose) { console.log("Database access complete."); }
+  if (verbose) { console.log("Notion database access complete."); }
   
   // Collect items, and check for missing BGG links
   detailsQueue = [];
-  notionItems = [];
   if (notionResult.object == 'list') {
     if (verbose) console.log("Count of items:", notionResult.results.length);
     for (const gameItem of notionResult.results) {
       game = new NotionItem(gameItem);
-      notionItems.push(game);
+      notionItems.include(game);
 
       const gameTitleObject = gameItem.properties["Name"].title;
       if (game.hasName()) {
@@ -271,8 +300,21 @@ async function doThings() {
 
 }
 
-doThings();
-console.log("Exit main loop.");
+function doExport() {
+  notionItems.sort((a,b) => a.name.toUpperCase() < b.name.toUpperCase() ? -1 : +1);
+  for (const item of notionItems.items) {
+    console.log('-', item.name);
+  }
+}
+
+doThings().then(() => {
+  console.log("Main fetch and update done.");
+  console.log("Proceed to export.");
+  doExport();
+  console.log("Export done.");
+});
+console.log("Main loop exit.");
+
 
 /*
 
