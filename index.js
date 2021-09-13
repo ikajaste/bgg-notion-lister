@@ -35,6 +35,24 @@ async function bgg_searchGame(queryText, exact=false) {
   if (res.items && res.items.total && res.items.total > 0) return res;
 
   res = await bgg('search', {'query': qs, 'exact': 0, 'type': 'boardgame,boardgameexpansion,boardgameaccessory'});
+
+  // Remove weird duplicate results
+  if (Array.isArray(res.items.item)) {
+    final = [];
+    ids = [];
+    for (const entry of res.items.item) {
+      if (ids.includes(entry.id)) continue;
+      final.push(entry);
+      ids.push(entry.id);
+    }
+    res.total = final.length;
+    if (final.length == 1) {
+      res.items.item = final.pop();
+    } else {
+      res.items.item = final;
+    }
+  }
+
   return res;
 }
 
@@ -320,7 +338,6 @@ async function doThings() {
           queryString = game.queryTitle;
           if (verbose) console.log("Performing a BGG search for: "+queryString);
           let bggResult = await bgg_searchGame(queryString);
-          //dumpj(bggResult);
           if (Array.isArray(bggResult.items.item)) {
             if (verbose) console.log("Found "+bggResult.items.total+" potential matches");
             const potentialIds = bggResult.items.item.map(item => item.id);
@@ -469,7 +486,7 @@ function doExport() {
     out += "\n\n<!-- Category: "+category+" -->\n<p>\n\n"
     if (!outCat[category]) continue;
     for (const item of outCat[category]) {
-      if (prevStartLetter != item.startLetter) {
+      if (category === 'default' && prevStartLetter != item.startLetter) {
         out += "\n<!-- "+item.startLetter+" -->\n\n<br/>\n";
         prevStartLetter = item.startLetter;
       }
