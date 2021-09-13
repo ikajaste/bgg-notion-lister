@@ -144,10 +144,12 @@ class NotionItem {
 
   doDebug() {
     if (this.debug) {
+      console.log("___ DEBUG FOR:", this.name, this.bgg_id, this.id)
       //dumpj(queueItem.notion_data);
       dumpj(this.data.properties["Display name"]);
       //dumpj(this.data.properties["Expansion for"]);
       dumpj(this.data.properties["Expanded by"]);
+      dumpj(this.data.properties["Minor expansion list"]);
       //dumpj(this.data.properties["Root game name"]);
     }
   }
@@ -195,6 +197,10 @@ class NotionItem {
     if (propertyData.relation.length > 0) return true;
     return false;
   }
+  isMinorExpansion() {
+    const propertyData = this.itemData.properties["Is minor expansion"];
+    return propertyData.checkbox;
+  }
   hasExpansions() {
     const propertyData = this.itemData.properties["Expanded by"];
     if (propertyData.relation.length > 0) return true;
@@ -215,6 +221,11 @@ class NotionItem {
     console.log("root game:", ri);
     return ri;
   }
+  get minorExpansionList() {
+    const propertyData = this.itemData.properties["Minor expansion list"];
+    //if (propertyData.rollup.array.length == 0) return null;
+    return propertyData.rollup.array.map(i => i.formula['string']).filter(i => i !== "");
+  }
   get expansionRootName() {
     const propertyData = this.itemData.properties["Root game name"];
     if (propertyData.rollup.array.length == 0) return null;
@@ -228,6 +239,11 @@ class NotionItem {
     } else {
       return this.name;
     }
+  }
+  get bgg_id() {
+    const propertyData = this.itemData.properties["bgg_id"];
+    if (!propertyData) return null;
+    return propertyData.number;
   }
   get id() {
     return this.itemData.id;
@@ -260,9 +276,15 @@ class NotionContainer {
     this.items.sort(sortFunction);
     //noop
   }
+
+  doDebug() {
+    for (const item of this.items) {
+      item.doDebug();
+    }
+  }
 }
 
-notionItems = new NotionContainer();
+const notionItems = new NotionContainer();
 
 async function doThings() {
   currentTime = new Date();
@@ -298,7 +320,7 @@ async function doThings() {
           queryString = game.queryTitle;
           if (verbose) console.log("Performing a BGG search for: "+queryString);
           let bggResult = await bgg_searchGame(queryString);
-          dumpj(bggResult);
+          //dumpj(bggResult);
           if (Array.isArray(bggResult.items.item)) {
             if (verbose) console.log("Found "+bggResult.items.total+" potential matches");
             const potentialIds = bggResult.items.item.map(item => item.id);
@@ -402,13 +424,20 @@ async function doThings() {
       });
     }
   }
-
+  notionItems.doDebug();
 }
 
 function exportTitle(item) {
   let add = item.displayName;
   if (item.lautapeliopas_url) {
     add = '<a href="'+item.lautapeliopas_url+'">'+add+'</a>';
+  }
+  if (item.minorExpansionList.length > 0) {
+    // Note: since minorExpansionList is calculated from rollup of a formula resultin in string
+    // it is not possible to get a backreference.
+    // To do a backreference with links, one could instead use something like:
+    //   item.expansions.filter(i => i.isMinorExpansion).map(i => i.lautapeliopas_url ? "a href..." : i.displayName)
+    add += " ("+item.minorExpansionList.map(str => '+ '+str).join(" ")+")";
   }
   return add;
 }
@@ -426,7 +455,7 @@ function doExport() {
     if (!outCat[cat]) outCat[cat] = [];
     startLetter = item.name.slice(0,1);
     if (item.hasExpansions()) {
-      const exps = item.expansions.sort((a,b) => a.name.toUpperCase() < b.name.toUpperCase() ? -1 : +1);
+      const exps = item.expansions.filter(i=>!i.isMinorExpansion()).sort((a,b) => a.name.toUpperCase() < b.name.toUpperCase() ? -1 : +1);
       for (const exp of exps) {
         add = add + '&nbsp;&nbsp;&nbsp;&nbsp;lisäosa: '+ exportTitle(exp) + "<br />\n";
       }
