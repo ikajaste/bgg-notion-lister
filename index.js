@@ -154,10 +154,48 @@ class NotionItem {
 
   constructor(itemData) {
     this.itemData = itemData;
+    this.associations = {};
   }
 
   setContainer(container) {
     this.container = container;
+  }
+
+  associate(notionKey, accessInterface, interfaceParameters, notionType) {
+    this.associations[notionKey] = { accessInterface, interfaceParameters };
+    this.notionDataType = notionType; // this would be better to have interpreted from original data some way
+  }
+
+  hasData(notionKey) {
+    const props = this.itemData.properties[notionKey];
+    if (!props) return false; // if empty, will not exist
+    if (this.notionType) {
+      if (props[this.notionType]) {
+        if (this.notionType == 'number' && props.number !== 0) return true; // count 0 as missing value(!)
+        if (this.notionType == 'url' && props.url !== "") return true;
+        if (this.notionType == 'rich_text' && props.rich_text.length > 0) return true;
+      }
+    } else { // Type not set, just check each
+      if (props.number && props.number !== 0) return true;
+      if (props.url && props.url !== "") return true;
+      if (props.rich_text && props.rich_text.length > 0) return true;
+    }
+  }
+
+  sync(forceSync=false) {
+    if (this.complete && !forceSync) return;
+    for (const [notionKey, assoc] of Object.entries(this.associations)) {
+      if (this.hasData(notionKey)) continue; // Skip if already has data
+      try {
+        newData = await assoc.accessInterface.fetch({ key: assoc.interfaceParameters, bgg_id: this.bgg_id });
+      } catch (err) {
+        if (err instanceof DataUnavailableError) {
+          console.log("Note: failed to find data for",notionKey);
+        } else {
+          throw err;
+        }
+      }
+    }
   }
 
   doDebug() {
@@ -178,6 +216,9 @@ class NotionItem {
     const name = this.name;
     if (name == '' || name == 'undefined') return false;
     return true;
+  }
+  get complete() {
+    return this.itemData.properties["data_complete"] && this.itemData.properties["data_complete"].checkbox;
   }
   get lautapeliopas_url() {
     const propertyData = this.itemData.properties["Lautapeliopas"];
@@ -251,7 +292,7 @@ class NotionItem {
     //return this.rootItem ? this.rootItem.name : null;
   }
   get queryTitle() {
-    if (this.isExpansion()) {
+    if (this.isExpansion() && !this.name.includes(this.expansionRootName)) {
       const rootname = this.expansionRootName;
       return rootname ? rootname+": "+this.name : this.name;
     } else {
@@ -299,6 +340,35 @@ class NotionContainer {
     for (const item of this.items) {
       item.doDebug();
     }
+  }
+}
+
+class DataUnavailableError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "DataUnavailableError";
+  }
+}
+
+class BGGInterface {
+  constructor() {
+    this.fetchedData = {};
+  }
+
+  async fetch(params) {
+    const bggKey = params.key;
+    // Fetch data or use cache
+    if (!this.fetchedData[bggKey]) this.fetchedData[bggKey] = await bgg_gameDetails(params.bgg_id);
+    const bggData = this.fetchedData[bggKey];
+
+    if (!bggData[bggKey] && bggData[bggKey] !== 0) throw new DataUnavailableError("Could not find data for "+bggKey);
+    return bggData[bggKey];
+  }
+}
+
+class LautapeliopasInterface {
+  async fetch() {
+
   }
 }
 
@@ -372,17 +442,21 @@ async function doThings() {
                 api_latest_sync: { date: { start: currentTime.toISOString() } }
               }
             });
-            detailsQueue.push({ gameTitle: gameTitle, bgg_id: bggId, notion_id: gameItem.id, notion_data: gameItem });
+            detailsQueue.push({ gameTitle: gameTitle, bgg_id: bggId, notion_id: gameItem.id, notionData: gameItem });
           }
         }
       }
     }
   }
+
+  bggInterface = new BGGInterface();
+  lpoInterface = new LautapeliopasInterface();
+
   // Check every item for details data
   console.log("Proceeding to check details.")
   for (const queueItem of detailsQueue) {
     if (verbose) console.log("*** Processing details for game",queueItem.gameTitle, "/", queueItem.bgg_id);
-    if (!queueItem.notion_data) {
+    if (!queueItem.notionData) {
       // fetch from notion
       continue;
     }
@@ -390,7 +464,7 @@ async function doThings() {
     bggData = queueItem.bgg_data;
     toUpdate = {};
     sync = async (notionKey, bggKey, notionType) => {
-      const props = queueItem.notion_data.properties[notionKey];
+      const props = queueItem.notionData.properties[notionKey];
       if (props) { // if empty, will not exist
         if (props.number && props.number !== 0) return; // Is already set
         if (props.url && props.url !== "") return; // Is already set
@@ -413,13 +487,27 @@ async function doThings() {
       }
     }
 
-    if (notion_item_debug(queueItem.notion_data)) {
+    if (notion_item_debug(queueItem.notionData)) {
       //dumpj(queueItem.notion_data);
       //dumpj(queueItem.notion_data.properties["Display name"]);
       //dumpj(queueItem.notion_data.properties["Expansion for"]);
       //game = notionItems.getItem(queueItem.notion_id)
     }
-    if (queueItem.notion_data.data_complete && queueItem.notion_data.data_complete.checkbox == true) continue; // data marked as complete, skipping
+    if (queueItem.complete) continue; // data marked as complete, skipping
+
+    queueItem.notionData.associate("Players min", bggInterface, { key: "minplayers", "number");
+    queueItem.notionData.associate("Players max", bggInterface, "maxplayers", "number");
+    queueItem.notionData.associate("Playtime min", bggInterface, "minplaytime", "number");
+    queueItem.notionData.associate("Playtime max", bggInterface, "maxplaytime", "number");
+    queueItem.notionData.associate("Age", "minage", bggInterface, "number");
+    queueItem.notionData.associate("Published year", bggInterface, "yearpublished", "number");
+    queueItem.notionData.associate("bgg_name", bggInterface, "primaryName", "rich_text");
+    queueItem.notionData.associate("BGG", bggInterface, "constructed_bgg_url", "url");
+    queueItem.notionData.associate("bgg_image_url", bggInterface, "image", "url");
+    queueItem.notionData.associate("Lautapeliopas", lpoInterface, "image", "url");
+    queueItem.sync();
+
+    /*
     await sync("Players min", "minplayers", "number");
     await sync("Players max", "maxplayers", "number");
     await sync("Playtime min", "minplaytime", "number");
@@ -429,6 +517,7 @@ async function doThings() {
     await sync("bgg_name", "primaryName", "rich_text");
     await sync("BGG", "constructed_bgg_url", "url");
     await sync("bgg_image_url", "image", "url");
+    */
 
     // to sync: BGG, bgg_name 
 
@@ -446,6 +535,10 @@ async function doThings() {
 
 function exportTitle(item) {
   let add = item.displayName;
+  if (item.isExpansion() && item.displayName.startsWith(item.expansionRootName)) {
+    add = item.displayName.substring(item.expansionRootName.length);
+    if (add.startsWith(':')) add = add.substring(1).trim();
+  }
   if (item.lautapeliopas_url) {
     add = '<a href="'+item.lautapeliopas_url+'">'+add+'</a>';
   }
