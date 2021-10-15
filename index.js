@@ -5,6 +5,7 @@ const { exit } = require('process');
 const { start } = require('repl');
 
 const verbose = true;
+const onlyDebug = true;
 
 // all options are optional
 const bgg_options = {
@@ -78,6 +79,7 @@ function bgg_processItem(item) {
   if (item.image) {
     item.image = item.image.replace('&amp;&amp;#35;40;','(').replace('&amp;&amp;#35;41;',')');
   }
+  console.log(item.defals);
   return item;
   /* Returning object:
    {
@@ -182,7 +184,7 @@ class NotionItem {
     }
   }
 
-  sync(forceSync=false) {
+  async sync(forceSync=false) {
     if (this.complete && !forceSync) return;
     for (const [notionKey, assoc] of Object.entries(this.associations)) {
       if (this.hasData(notionKey)) continue; // Skip if already has data
@@ -387,6 +389,8 @@ async function doThings() {
   if (notionResult.object == 'list') {
     if (verbose) console.log("Count of items:", notionResult.results.length);
     for (const gameItem of notionResult.results) {
+      if (onlyDebug && (!gameItem.properties || !gameItem.properties.DEBUG_THIS || !gameItem.properties.DEBUG_THIS.checkbox)) continue;
+
       game = new NotionItem(gameItem);
       notionItems.include(game);
 
@@ -495,7 +499,7 @@ async function doThings() {
     }
     if (queueItem.complete) continue; // data marked as complete, skipping
 
-    queueItem.notionData.associate("Players min", bggInterface, { key: "minplayers", "number");
+    queueItem.notionData.associate("Players min", bggInterface, "minplayers", "number");
     queueItem.notionData.associate("Players max", bggInterface, "maxplayers", "number");
     queueItem.notionData.associate("Playtime min", bggInterface, "minplaytime", "number");
     queueItem.notionData.associate("Playtime max", bggInterface, "maxplaytime", "number");
@@ -505,7 +509,7 @@ async function doThings() {
     queueItem.notionData.associate("BGG", bggInterface, "constructed_bgg_url", "url");
     queueItem.notionData.associate("bgg_image_url", bggInterface, "image", "url");
     queueItem.notionData.associate("Lautapeliopas", lpoInterface, "image", "url");
-    queueItem.sync();
+    await queueItem.sync();
 
     /*
     await sync("Players min", "minplayers", "number");
